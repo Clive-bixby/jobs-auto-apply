@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -669,6 +670,31 @@ async def _finish_pending_questions(
             console.print("[yellow]No jobs were applied on retry (may need more answers or manual re-run).[/yellow]")
 
 
+@main.command("web")
+@click.option(
+    "--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default="config.yaml"
+)
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8770, type=int, show_default=True)
+def web_cmd(config_path: Path, host: str, port: int) -> None:
+    """Serve the web dashboard for discovery, review, approvals and history.
+
+    An add-on over the existing bot: same config, browser sessions, review queue
+    and applied-jobs history. Applications are submitted only for jobs you have
+    approved, using the existing `apply-reviewed` flow. Discovery never submits.
+    """
+    import uvicorn
+
+    from .web.app import create_app
+
+    console.print(
+        f"[bold]Jobs Auto-Apply dashboard[/bold] -> [cyan]http://{host}:{port}[/cyan]\n"
+        "[dim]Runs use your existing config.yaml, sessions and review queue. "
+        "Nothing is submitted unless you approve it first.[/dim]"
+    )
+    uvicorn.run(create_app(config_path), host=host, port=port)
+
+
 @main.command("review")
 @click.option(
     "--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default="config.yaml"
@@ -720,8 +746,18 @@ def review_status_cmd(config_path: Path, platform: str) -> None:
     console.print(table)
 
 
-async def _apply_reviewed_cmd(config_path: Path, platform: str, verbose: bool) -> None:
+async def _apply_reviewed_cmd(
+    config_path: Path,
+    platform: str,
+    verbose: bool,
+    *,
+    config_mutator: Callable[[AppConfig], None] | None = None,
+) -> None:
     config = load_config(config_path)
+    if config_mutator is not None:
+        # Used by the web dashboard to apply its preference overlay in memory
+        # without ever rewriting config.yaml.
+        config_mutator(config)
     setup_logging(config.log_path, verbose=verbose)
     _check_prerequisites(config, require_resume=True)
     resume_handles = await _start_resume_sync(config, platform)
@@ -801,8 +837,20 @@ async def _apply_reviewed(config: AppConfig, platform: str) -> None:
     _export_applied_report(config)
 
 
-async def _review(config_path: Path, platform: str, no_prompt: bool, re_enrich: bool, verbose: bool) -> None:
+async def _review(
+    config_path: Path,
+    platform: str,
+    no_prompt: bool,
+    re_enrich: bool,
+    verbose: bool,
+    *,
+    config_mutator: Callable[[AppConfig], None] | None = None,
+) -> None:
     config = load_config(config_path)
+    if config_mutator is not None:
+        # Used by the web dashboard to apply its preference overlay in memory
+        # without ever rewriting config.yaml.
+        config_mutator(config)
     setup_logging(config.log_path, verbose=verbose)
     _check_prerequisites(config, require_resume=False)
     review_dir = _review_dir(config)
