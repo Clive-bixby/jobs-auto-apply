@@ -30,6 +30,8 @@ When a recruiter question appears, the answer engine (`jobs_auto_apply/answers/`
 2. **Config / profile facts** — deterministic values from `profile/application_facts.yaml` (notice period, PAN/UAN, education, skill years, location, CTC, …).
 3. **RAG** — retrieval over your profile facts / resume to answer factual questions.
 4. **LLM** — a local Ollama model drafts an answer, optionally double-checked by a verifier model for high-risk fields (CTC, employer, years of experience).
+5. **Fallback** — a deterministic last-resort answer (profile facts, a matching field option, or a sane default) so an unknown question never blocks an application. Not persisted: re-derived per run.
+6. **Guess** — an ephemeral, best-effort guess for the current form only. Identity / government / demographic questions are never guessed, and guesses are **never** written to `user_memory`, so a wrong guess cannot leak into later applications.
 
 Answers below the confidence bar are **not** auto-filled — they're queued in `pending_questions.json`. Genuine fill failures are recorded in `data/technical_failures.json` so they can be retried.
 
@@ -65,6 +67,7 @@ The entry point is `main.py`, which loads `.env` (if present) and invokes the Cl
 | Command | Description |
 |---------|-------------|
 | `run` | Search, filter, and apply automatically (or apply the approved queue if `require_review` is set). |
+| `web` | **New** — browser dashboard for discovery, review, approvals and history (`--host`/`--port`, default `127.0.0.1:8770`). Same config, sessions, review queue and applied-jobs history as the CLI; applications are submitted only for jobs you approve. |
 | `serve` | Always-on HTTP server (uvicorn): re-applies every N minutes and exposes `GET /status` and `POST /run-now` (`--host`/`--port`, default `127.0.0.1:8765`). With `telegram.mode: listener`, Telegram Q&A runs in the same process. |
 | `review` | Collect listings per platform, then interactively approve/reject before applying. |
 | `apply-reviewed` | Submit applications only for jobs approved in the review queue. |
@@ -93,6 +96,38 @@ python main.py run --platform all --verbose
 python main.py answer-questions          # fill in deferred questions
 python main.py answer-questions --review # fix bad saved answers
 ```
+
+## Web dashboard
+
+A browser add-on over the existing bot — same config, sessions, review queue and
+applied-jobs history. Applications are submitted **only for jobs you have
+approved**; discovery never submits.
+
+```bash
+python main.py web
+# opens http://127.0.0.1:8770
+```
+
+The dashboard (`jobs_auto_apply/web/`) is a thin control and reporting surface:
+
+| View | What it does |
+|------|--------------|
+| Overview | Per-platform progress toward your `max_jobs_per_run` goal, live run log, pause/resume. |
+| Review | Approve / reject / drop listings from `data/review/<platform>.json` — the same queue `review` writes and `apply-reviewed` reads. |
+| Applications | Manual applications + the applied-jobs ledger (`data/applied_jobs.json`), searchable. |
+| Activity | Run history (`data/web/runs.json`) with per-run discovered/applied counts and log tail. |
+| Settings | Preference overlay (apply mode, per-platform caps, dry-run) — applied in memory, never rewrites `config.yaml`. |
+
+Build the React UI once:
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+Without a build, the server still runs the JSON API at `/api/status` and shows a
+"build the bundle" notice at `/`.
 
 ## Answer pending questions over chat (Telegram / WhatsApp)
 
@@ -359,6 +394,7 @@ Created under `data/` (paths configurable in `config.paths`):
 | `data/applied_jobs.json`, `data/run.log` | Applied-job ledger (platform, role, company, URL, status) and run log. |
 | `data/applied_jobs.csv` | Excel-friendly export of the ledger, rewritten after every cycle (`python main.py export`). |
 | `data/applied_jobs.html` | Self-contained dashboard: per-platform counts, last-7-days total, searchable/filterable table. |
+| `data/web/runs.json` | Dashboard run history (kind, platform, status, discovered/applied, log tail). |
 
 ## Scripts
 
@@ -371,6 +407,10 @@ Created under `data/` (paths configurable in `config.paths`):
 | `scripts/test_single_naukri.py` | Apply to a single Naukri job for debugging. |
 | `scripts/test_single_hirist.py` | Apply to a single Hirist job for debugging. |
 | `scripts/debug_jd.py` | Inspect scraped job-description / cover-note output. |
+| `scripts/auto_answer_pending.py` | Guess-and-retry pass over pending screening questions. |
+| `scripts/_answer_pending.py` | Answer every pending question from a profile-derived answer map. |
+| `scripts/_progress.py` | Applications per portal this session + skip/failure reasons. |
+| `scripts/_inspect_state.py` | Dump applied/pending/technical-failure state for debugging. |
 
 ## Safety
 
@@ -396,6 +436,9 @@ jobs-auto-apply/
 │   ├── Modelfile.job-answers    # generator model
 │   └── Modelfile.job-verify     # verifier model
 ├── scripts/                     # setup + maintenance + debug helpers
+├── web/                         # dashboard frontend (Vite + React + TS)
+│   ├── src/                     #   views, components, api client
+│   └── dist/                    #   built SPA (served by the backend)
 └── jobs_auto_apply/
     ├── cli.py                   # Click CLI (run, review, login, …)
     ├── config.py                # config loading + dataclasses
@@ -408,7 +451,9 @@ jobs-auto-apply/
     ├── question_groups.py       # group questions to share one answer
     ├── application_questions.py # discover/resolve/fill orchestration
     ├── answers/                 # answer resolution engine
-    │   ├── resolve.py           #   saved -> config -> RAG -> LLM order
+    │   ├── resolve.py           #   saved -> config -> RAG -> LLM -> fallback -> guess order
+    │   ├── fallback.py          #   deterministic last-resort answer (not persisted)
+    │   ├── guess.py             #   ephemeral best-effort guess for this form only
     │   ├── memory_store.py      #   save/lookup saved answers
     │   ├── persist_policy.py    #   when a draft may be persisted
     │   └── …                    #   fields, validation, chips, location, etc.
@@ -417,7 +462,14 @@ jobs-auto-apply/
     ├── uplers/                  # search.py / apply.py
     ├── naukri/                  # search.py / apply.py / questions.py / resume sync
     ├── hirist/                  # search.py / apply.py / questions.py
-    └── instahyre/               # search.py / apply.py / feeds.py
+    ├── instahyre/               # search.py / apply.py / feeds.py
+    └── web/                     # dashboard backend (FastAPI + run controller)
+        ├── app.py               #   create_app() + SPA serving
+        ├── api.py               #   REST surface (review, runs, history, …)
+        ├── controller.py        #   AutomationController: serialises runs
+        ├── manual_applications.py
+        ├── preferences.py       #   dashboard preference overlay
+        └── preflight.py         #   pre-run blockers
 ```
 
 ## Troubleshooting
@@ -431,4 +483,7 @@ jobs-auto-apply/
 | External URL not captured | Job may use in-platform apply — apply manually. |
 | ATS submit failed | Site may use CAPTCHA or a non-standard form — apply manually. |
 | Missing email error | Set `user.email` in `config.yaml`. |
+| Dashboard shows "bundle not built" | Run `cd web && npm install && npm run build`, then reload. |
+| Instahyre feed stops early | The feed is infinite-scroll; if it declares exhausted while later rows exist, re-run — rows load on scroll. |
+| Wrong guess saved to memory | Guesses are never persisted; only LLM/RAG drafts above `min_confidence_persist` are. Run `scripts/cleanup_user_memory.py` to prune. |
 ```
