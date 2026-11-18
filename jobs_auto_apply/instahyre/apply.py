@@ -276,12 +276,21 @@ async def apply_feed(page: Page, spec: InstahyreFeedSpec, config: AppConfig, app
     applied = 0
     cap = apply_cap(config.application.max_jobs_per_run)
     handled: set[str] = set()
+    empty_scrolls = 0
 
     for _ in range(20):
         if cap is not None and applied >= cap:
             break
 
         picked = await _first_acceptable_row(page, config, handled)
+        if picked is None:
+            # The feed is infinite-scroll and only ~30 rows load at first; scrolling
+            # here (not only after an apply) reaches the rest instead of declaring
+            # the feed exhausted while later batches are still unloaded.
+            if empty_scrolls < 5:
+                empty_scrolls += 1
+                await _scroll_load_more(page, rounds=3)
+                picked = await _first_acceptable_row(page, config, handled)
         if picked is None:
             logger.info("No acceptable rows left on feed %s", spec.name)
             break
