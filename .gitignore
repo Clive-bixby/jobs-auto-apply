@@ -175,3 +175,14 @@ litellm/.env
 litellm/litellm.db
 data/resume_text.cache.txt
 .playwright/
+
+# Web dashboard
+web/node_modules/
+web/dist/
+data/web/
+
+# Local run config (mirrors the committed config.yaml; never commit a copy)
+config.run.yaml
+
+# Chat attachments (not part of the repo)
+.cloud-attachments/
