@@ -174,6 +174,8 @@ def build_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "avatar_color": _avatar_color(company),
                 "family": family,
                 "status": status,
+                # Full ledger key, so the dashboard can tell manual rows apart.
+                "job_key": key,
                 "job_id": key.split(":", 1)[-1] if key else "",
                 "url": str(entry.get("url") or ""),
                 "reason": str(entry.get("reason") or ""),
