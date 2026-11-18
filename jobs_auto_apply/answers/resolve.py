@@ -399,4 +399,26 @@ async def resolve_question_answers(
             logger.warning("Could not save interactive answer for: %s", label[:60])
             continue
         answers[label] = fill_value
+
+    # Second pass: anything still unanswered gets an ephemeral educated guess so
+    # the application is not deferred. Guesses are filled for this form only and
+    # are never written to memory (see answers/guess.py).
+    from .guess import guess_answer
+
+    for label, field in needs_draft:
+        if label in answers:
+            continue
+        guess = guess_answer(config, label, field, job=job)
+        if not guess:
+            continue
+        if not answer_acceptable_for_field(label, guess, field):
+            logger.info("Guess rejected for field: %s", label[:60])
+            continue
+        answers[label] = guess
+        logger.info(
+            "Guessed answer (ephemeral, not saved): %s -> %s",
+            label[:70],
+            guess[:70],
+        )
+
     return answers
